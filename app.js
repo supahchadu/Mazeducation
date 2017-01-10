@@ -40,7 +40,7 @@ console.log('Server Started');
 + Emiting: socket.emit(sends message to server)
 +---------------------------------------*/
 var io = require('socket.io')(serv,{});
-
+var DEBUG = true; // if release turn this to FALSE
 // Function that Listens
 io.sockets.on('connection',function(socket){
 	console.log('socket connection')
@@ -57,9 +57,22 @@ io.sockets.on('connection',function(socket){
 		Player.onDisconnect(socket);
 	});
 	
+	socket.on('sendMsgToServer', function(data){
+		var playerName = ("" + socket.id).slice(2,7);
+		for(var i in SOCKET_LIST)
+			SOCKET_LIST[i].emit('addToChat', playerName + ':' + data);
+	});
 	// Retrieve the message emitted from the HTML 'happy'
 	socket.on('happy',function(data){
 		console.log('Client is happy' + data.reason);
+	});
+	
+	socket.on('evalServer', function(data){
+		if(!DEBUG)
+			return;
+		
+		var res = eval(data);
+		socket.emit('evalAnswer',res)
 	});
 	
 	// Send a message 'serverMsg' to the HTML with a msg data.
@@ -106,6 +119,8 @@ var Player = function(id){
 	self.pressingLeft = false;
 	self.pressingUp = false;
 	self.pressingDown = false;
+	self.pressingAttack = false;
+	self.mouseAngle = 0;
 	self.maxSpd = 10;
 	
 	// A reference to the Base Class update
@@ -115,6 +130,10 @@ var Player = function(id){
 		self.updateSpd();
 		// Execute the base class update func
 		super_update();
+		
+		if(self.pressingAttack){
+			self.shootBullet(self.mouseAngle);
+		}
 	}
 	
 	self.updateSpd = function() {
@@ -130,6 +149,13 @@ var Player = function(id){
 			self.spdY = -self.maxSpd;
 		else
 			self.spdY = 0;
+	}
+	
+	// function lets the user shoot bullets.
+	self.shootBullet = function(angle){
+		var b = Bullet(self.id,angle);
+		b.x = self.x;
+		b.y = self.y;
 	}
 	// Add the newly created Player to a list
 	Player.list[id] = self;
@@ -152,6 +178,10 @@ Player.onConnect = function(socket){
 			player.pressingUp = data.state;
 		else if(data.inputId === 'down')
 			player.pressingDown = data.state;
+		else if(data.inputId === 'mouseAngle')
+			player.mouseAngle = data.state;
+		else if(data.inputId === 'attack')
+			player.pressingAttack = data.state;
 	});
 	
 	// Socket Listening to onKeyUp, emitted by Client.
@@ -165,6 +195,8 @@ Player.onConnect = function(socket){
 		else if(data.inputId === 'down')
 			player.pressingDown = data.state;
 	});
+	
+	// Socket listening to event mouse click
 }
 // This handles the removal of the player on disconnect.
 Player.onDisconnect = function(socket){
@@ -213,6 +245,10 @@ var Entity = function() {
 		self.x += self.spdX;
 		self.y += self.spdY;
 	}
+	
+	self.getDistance = function(pt) {
+		return Math.sqrt(Math.pow(self.x-pt.x,2) + Math.pow(self.y-pt.y,2));
+	}
 	return self;
 }
 
@@ -222,7 +258,7 @@ var Entity = function() {
 #  the player to 
 ########################################
 +---------------------------------------*/
-var Bullet = function(angle){
+var Bullet = function(parent,angle){
 	var self = Entity();
 	self.id = Math.random();
 	// Direction of the bullet to project...
@@ -231,12 +267,20 @@ var Bullet = function(angle){
 	self.timer = 0;
 	// Bool to delete the bullet or not.
 	self.toRemove = false;
-	
+	self.parent = parent;
 	var super_update = self.update;
 	self.update = function(){
 		if(self.timer++ > 100)
 			self.toRemove = true;
 		super_update();
+		
+		for(var i in Player.list){
+			var p = Player.list[i];
+			if(self.getDistance(p) < 32 && self.parent != p.id){
+				// Collision is true, then remove HP --
+				self.toRemove = true;
+			}
+		}
 	}
 	Bullet.list[self.id] = self;
 	return self;
@@ -244,14 +288,13 @@ var Bullet = function(angle){
 Bullet.list = {}; // List of bullets in the game with unique id.
 
 Bullet.update = function() {
-	// Creates a bullet randomly depends...
-	if(Math.random() < 0.1){
-		Bullet(Math.random()*360);
-	}
 	var bulletPack = []; //	List of all bullets in the game
 	for(var i in Bullet.list){
 		var bullet = Bullet.list[i];
 		bullet.update();
+		if(bullet.toRemove)
+			delete Bullet.list[i];
+		
 		bulletPack.push({
 			x:bullet.x,
 			y:bullet.y,
